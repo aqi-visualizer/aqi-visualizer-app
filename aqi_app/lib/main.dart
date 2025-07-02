@@ -103,115 +103,49 @@ class HomePage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     // Hardcoded current AQI data for demo
-    final aqi = 45;
+    final aqi = 35;
     final status = "Good";
-    final aqiText = "AQI: $aqi";
-    final imageUrl =
-        "https://lh3.googleusercontent.com/aida-public/AB6AXuD7zumgVuOdx6RsTXmj_OL7fZN2ssI2XYgtaIaeJ3mNCWWsmEDGKir7UBYGZcsx6AYN_79DRDzz6PASUFhgG4a7CB7L9SRAlquSs0K4Gl4qEc332GjdzhMX2ZTAHC9z_42nvkjw9KkdAZ6HSmB3aPbdAxiKMfWjt2tY1G7q1TYkdxyTdQNQmXV1vDMZL5skpvp1zFMa71_NpqefyIlv-8hmyTwfVeX8iIAQ_u_xmjPVYjFvdCTK3BpG2BuuLAHgarnezlElLHzfKg";
+    final healthMsg =
+        "Air quality is satisfactory, and air pollution poses little or no risk.";
+    final cardBgUrl =
+        "https://images.unsplash.com/photo-1506744038136-46273834b3fb?auto=format&fit=crop&w=800&q=80"; // sky with clouds
 
     return Scaffold(
       appBar: AppBar(
         title: const Text(
-          'Air Quality Index',
+          'Air Quality',
           style: TextStyle(
             fontWeight: FontWeight.bold,
-            fontSize: 18,
+            fontSize: 22,
             letterSpacing: -0.5,
           ),
         ),
         centerTitle: true,
         backgroundColor: const Color(0xFF131B20),
         elevation: 0,
+        actions: [
+          IconButton(icon: const Icon(Icons.settings), onPressed: () {}),
+        ],
       ),
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(16),
         child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             LocationSearchBar(
               onLocationSelected: onLocationSelected,
               initialValue: location.name,
             ),
             const SizedBox(height: 16),
-            // AQI summary card
-            Container(
-              margin: const EdgeInsets.symmetric(vertical: 8),
-              child: Row(
-                children: [
-                  Expanded(
-                    flex: 2,
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Text(
-                          "Current AQI",
-                          style: TextStyle(
-                            color: Color(0xFF9AB1C1),
-                            fontSize: 14,
-                          ),
-                        ),
-                        const SizedBox(height: 4),
-                        Text(
-                          status,
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontWeight: FontWeight.bold,
-                            fontSize: 16,
-                          ),
-                        ),
-                        const SizedBox(height: 4),
-                        Text(
-                          aqiText,
-                          style: const TextStyle(
-                            color: Color(0xFF9AB1C1),
-                            fontSize: 14,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    flex: 3,
-                    child: ClipRRect(
-                      borderRadius: BorderRadius.circular(16),
-                      child: AspectRatio(
-                        aspectRatio: 16 / 9,
-                        child: Image.network(imageUrl, fit: BoxFit.cover),
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 16),
-            // Location name
-            Row(
-              children: [
-                const Icon(Icons.location_on, color: Colors.blue, size: 20),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    location.name,
-                    style: const TextStyle(
-                      fontSize: 16,
-                      color: Colors.white,
-                      fontWeight: FontWeight.w500,
-                    ),
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 16),
-            // Map
+            // Map at the top
             ClipRRect(
-              borderRadius: BorderRadius.circular(16),
+              borderRadius: BorderRadius.circular(20),
               child: SizedBox(
-                height: 200,
+                height: 180,
                 child: FlutterMap(
                   options: MapOptions(
                     center: LatLng(location.lat, location.lon),
-                    zoom: 15,
+                    zoom: 13,
                   ),
                   children: [
                     TileLayer(
@@ -236,6 +170,47 @@ class HomePage extends StatelessWidget {
                   ],
                 ),
               ),
+            ),
+            const SizedBox(height: 24),
+            // AQI Card
+            Container(
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(20),
+                image: DecorationImage(
+                  image: NetworkImage(cardBgUrl),
+                  fit: BoxFit.cover,
+                ),
+              ),
+              padding: const EdgeInsets.all(24),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    status,
+                    style: const TextStyle(
+                      fontSize: 28,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.white,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    'AQI: $aqi',
+                    style: const TextStyle(fontSize: 20, color: Colors.white),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 24),
+            // Health message
+            Text(
+              healthMsg,
+              style: const TextStyle(
+                fontSize: 18,
+                color: Colors.white,
+                fontWeight: FontWeight.w400,
+              ),
+              textAlign: TextAlign.center,
             ),
           ],
         ),
