@@ -2,6 +2,10 @@ import 'package:flutter/material.dart';
 import 'location_search_bar.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
+import 'package:geolocator/geolocator.dart';
+import 'dart:convert';
+import 'package:http/http.dart' as http;
+import 'dart:math';
 
 class LocationData {
   final String name;
@@ -46,6 +50,55 @@ class _MainScreenState extends State<MainScreen> {
     lat: 26.1844,
     lon: 91.7499,
   );
+  bool _isLocating = false;
+
+  Future<void> _locateMe() async {
+    setState(() => _isLocating = true);
+    try {
+      bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
+      if (!serviceEnabled) {
+        setState(() => _isLocating = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Location services are disabled.')),
+        );
+        return;
+      }
+      LocationPermission permission = await Geolocator.checkPermission();
+      if (permission == LocationPermission.denied) {
+        permission = await Geolocator.requestPermission();
+        if (permission == LocationPermission.denied) {
+          setState(() => _isLocating = false);
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Location permissions are denied.')),
+          );
+          return;
+        }
+      }
+      if (permission == LocationPermission.deniedForever) {
+        setState(() => _isLocating = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Location permissions are permanently denied.'),
+          ),
+        );
+        return;
+      }
+      Position position = await Geolocator.getCurrentPosition();
+      setState(() {
+        _selectedLocation = LocationData(
+          name: 'Current Location',
+          lat: position.latitude,
+          lon: position.longitude,
+        );
+        _isLocating = false;
+      });
+    } catch (e) {
+      setState(() => _isLocating = false);
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Failed to get location: $e')));
+    }
+  }
 
   void _onLocationSelected(String name, double lat, double lon) {
     setState(() {
@@ -59,6 +112,8 @@ class _MainScreenState extends State<MainScreen> {
       HomePage(
         location: _selectedLocation,
         onLocationSelected: _onLocationSelected,
+        isLocating: _isLocating,
+        onLocateMe: _locateMe,
       ),
       ForecastPage(
         location: _selectedLocation,
@@ -91,25 +146,165 @@ class _MainScreenState extends State<MainScreen> {
   }
 }
 
-class HomePage extends StatelessWidget {
+class HomePage extends StatefulWidget {
   final LocationData location;
   final Function(String, double, double) onLocationSelected;
+  final bool isLocating;
+  final VoidCallback onLocateMe;
   const HomePage({
     Key? key,
     required this.location,
     required this.onLocationSelected,
+    required this.isLocating,
+    required this.onLocateMe,
   }) : super(key: key);
 
   @override
+  State<HomePage> createState() => _HomePageState();
+}
+
+class _HomePageState extends State<HomePage> {
+  int? pm10Avg;
+  String status = '';
+  String healthMsg = '';
+  String? stationName;
+  String? lastUpdate;
+  bool isLoading = false;
+  String? errorMsg;
+
+  @override
+  void initState() {
+    super.initState();
+    fetchAQI();
+  }
+
+  @override
+  void didUpdateWidget(HomePage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.location.lat != widget.location.lat ||
+        oldWidget.location.lon != widget.location.lon) {
+      fetchAQI();
+    }
+  }
+
+  double _distance(double lat1, double lon1, double lat2, double lon2) {
+    // Haversine formula
+    const R = 6371; // km
+    final dLat = (lat2 - lat1) * pi / 180.0;
+    final dLon = (lon2 - lon1) * pi / 180.0;
+    final a =
+        sin(dLat / 2) * sin(dLat / 2) +
+        cos(lat1 * pi / 180.0) *
+            cos(lat2 * pi / 180.0) *
+            sin(dLon / 2) *
+            sin(dLon / 2);
+    final c = 2 * atan2(sqrt(a), sqrt(1 - a));
+    return R * c;
+  }
+
+  Future<void> fetchAQI() async {
+    setState(() {
+      isLoading = true;
+      errorMsg = null;
+    });
+    try {
+      final apiKey = '579b464db66ec23bdd000001340cb86febee44fe51c61072dacb3394';
+      final url = Uri.parse(
+        'https://api.data.gov.in/resource/3b01bcb8-0b14-4abf-b6f2-c1bfd384ba69?api-key=$apiKey&format=json&limit=100',
+      );
+      final response = await http.get(url);
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        final records = data['records'] as List?;
+        if (records != null && records.isNotEmpty) {
+          // Find nearest station with a valid avg_value
+          double minDist = double.infinity;
+          Map<String, dynamic>? nearest;
+          for (final rec in records) {
+            final latStr = rec['latitude'];
+            final lonStr = rec['longitude'];
+            final avgStr = rec['avg_value'];
+            if (latStr == null ||
+                lonStr == null ||
+                avgStr == null ||
+                avgStr == 'NA')
+              continue;
+            final lat = double.tryParse(latStr);
+            final lon = double.tryParse(lonStr);
+            if (lat == null || lon == null) continue;
+            final dist = _distance(
+              widget.location.lat,
+              widget.location.lon,
+              lat,
+              lon,
+            );
+            if (dist < minDist) {
+              minDist = dist;
+              nearest = rec;
+            }
+          }
+          if (nearest != null) {
+            final avgValue = int.tryParse(nearest['avg_value']);
+            setState(() {
+              pm10Avg = avgValue;
+              stationName = nearest!['station'];
+              lastUpdate = nearest!['last_update'];
+              status = getAQIStatus(avgValue);
+              healthMsg = getHealthMsg(avgValue);
+              isLoading = false;
+            });
+          } else {
+            setState(() {
+              errorMsg = 'No AQI data found for this location.';
+              isLoading = false;
+            });
+          }
+        } else {
+          setState(() {
+            errorMsg = 'No AQI data found.';
+            isLoading = false;
+          });
+        }
+      } else {
+        setState(() {
+          errorMsg = 'Failed to fetch AQI data.';
+          isLoading = false;
+        });
+      }
+    } catch (e) {
+      setState(() {
+        errorMsg = 'Error: $e';
+        isLoading = false;
+      });
+    }
+  }
+
+  String getAQIStatus(int? value) {
+    if (value == null) return '';
+    if (value <= 50) return 'Good';
+    if (value <= 100) return 'Moderate';
+    if (value <= 200) return 'Unhealthy';
+    if (value <= 300) return 'Very Unhealthy';
+    return 'Hazardous';
+  }
+
+  String getHealthMsg(int? value) {
+    if (value == null) return '';
+    if (value <= 50)
+      return 'Air quality is satisfactory, and air pollution poses little or no risk.';
+    if (value <= 100)
+      return 'Air quality is acceptable. Sensitive individuals should avoid outdoor activity.';
+    if (value <= 200)
+      return 'Everyone may begin to experience health effects; sensitive groups may experience more serious health effects.';
+    if (value <= 300)
+      return 'Health warnings of emergency conditions. The entire population is more likely to be affected.';
+    return 'Health alert: everyone may experience more serious health effects.';
+  }
+
+  @override
   Widget build(BuildContext context) {
-    // Hardcoded current AQI data for demo
-    final aqi = 35;
-    final status = "Good";
-    final healthMsg =
-        "Air quality is satisfactory, and air pollution poses little or no risk.";
     final cardBgUrl =
         "https://images.unsplash.com/photo-1506744038136-46273834b3fb?auto=format&fit=crop&w=800&q=80"; // sky with clouds
-
     return Scaffold(
       appBar: AppBar(
         title: const Text(
@@ -133,85 +328,147 @@ class HomePage extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             LocationSearchBar(
-              onLocationSelected: onLocationSelected,
-              initialValue: location.name,
+              onLocationSelected: widget.onLocationSelected,
+              initialValue: widget.location.name,
             ),
             const SizedBox(height: 16),
             // Map at the top
-            ClipRRect(
-              borderRadius: BorderRadius.circular(20),
-              child: SizedBox(
-                height: 180,
-                child: FlutterMap(
-                  options: MapOptions(
-                    center: LatLng(location.lat, location.lon),
-                    zoom: 13,
-                  ),
-                  children: [
-                    TileLayer(
-                      urlTemplate:
-                          'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
-                      subdomains: ['a', 'b', 'c'],
-                    ),
-                    MarkerLayer(
-                      markers: [
-                        Marker(
-                          width: 40,
-                          height: 40,
-                          point: LatLng(location.lat, location.lon),
-                          child: const Icon(
-                            Icons.location_on,
-                            color: Colors.red,
-                            size: 40,
-                          ),
+            Stack(
+              children: [
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(20),
+                  child: SizedBox(
+                    height: 180,
+                    child: FlutterMap(
+                      options: MapOptions(
+                        center: LatLng(
+                          widget.location.lat,
+                          widget.location.lon,
+                        ),
+                        zoom: 13,
+                      ),
+                      children: [
+                        TileLayer(
+                          urlTemplate:
+                              'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+                          subdomains: ['a', 'b', 'c'],
+                        ),
+                        MarkerLayer(
+                          markers: [
+                            Marker(
+                              width: 40,
+                              height: 40,
+                              point: LatLng(
+                                widget.location.lat,
+                                widget.location.lon,
+                              ),
+                              child: const Icon(
+                                Icons.location_on,
+                                color: Colors.red,
+                                size: 40,
+                              ),
+                            ),
+                          ],
                         ),
                       ],
                     ),
-                  ],
+                  ),
                 ),
-              ),
+                Positioned(
+                  top: 8,
+                  right: 8,
+                  child: FloatingActionButton(
+                    mini: true,
+                    backgroundColor: Colors.white,
+                    onPressed: widget.isLocating ? null : widget.onLocateMe,
+                    child: widget.isLocating
+                        ? const SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.my_location, color: Colors.blue),
+                  ),
+                ),
+              ],
             ),
             const SizedBox(height: 24),
             // AQI Card
-            Container(
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(20),
-                image: DecorationImage(
-                  image: NetworkImage(cardBgUrl),
-                  fit: BoxFit.cover,
+            if (isLoading) const Center(child: CircularProgressIndicator()),
+            if (!isLoading && errorMsg != null)
+              Center(
+                child: Text(
+                  errorMsg!,
+                  style: const TextStyle(color: Colors.red, fontSize: 16),
                 ),
               ),
-              padding: const EdgeInsets.all(24),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+            if (!isLoading && errorMsg == null && pm10Avg != null)
+              Column(
                 children: [
-                  Text(
-                    status,
-                    style: const TextStyle(
-                      fontSize: 28,
-                      fontWeight: FontWeight.bold,
-                      color: Colors.white,
+                  Container(
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(20),
+                      image: DecorationImage(
+                        image: NetworkImage(cardBgUrl),
+                        fit: BoxFit.cover,
+                      ),
+                    ),
+                    padding: const EdgeInsets.all(24),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          status,
+                          style: const TextStyle(
+                            fontSize: 28,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.white,
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          'PM10 Avg: $pm10Avg',
+                          style: const TextStyle(
+                            fontSize: 20,
+                            color: Colors.white,
+                          ),
+                        ),
+                        if (stationName != null) ...[
+                          const SizedBox(height: 8),
+                          Text(
+                            'Station: $stationName',
+                            style: const TextStyle(
+                              fontSize: 15,
+                              color: Colors.white,
+                            ),
+                          ),
+                        ],
+                        if (lastUpdate != null) ...[
+                          const SizedBox(height: 4),
+                          Text(
+                            'Last Update: $lastUpdate',
+                            style: const TextStyle(
+                              fontSize: 13,
+                              color: Colors.white70,
+                            ),
+                          ),
+                        ],
+                      ],
                     ),
                   ),
-                  const SizedBox(height: 8),
+                  const SizedBox(height: 24),
+                  // Health message
                   Text(
-                    'AQI: $aqi',
-                    style: const TextStyle(fontSize: 20, color: Colors.white),
+                    healthMsg,
+                    style: const TextStyle(
+                      fontSize: 18,
+                      color: Colors.white,
+                      fontWeight: FontWeight.w400,
+                    ),
+                    textAlign: TextAlign.center,
                   ),
                 ],
               ),
-            ),
-            const SizedBox(height: 24),
-            // Health message
-            Text(
-              healthMsg,
-              style: const TextStyle(
-                fontSize: 18,
-                color: Colors.white,
-                fontWeight: FontWeight.w400,
-              ),
-              textAlign: TextAlign.center,
-            ),
           ],
         ),
       ),
